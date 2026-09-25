@@ -298,3 +298,13 @@ ul.plain li { padding: 4px 0; font-size: 14px; }
 }
 .precedence-query-row input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 tr.combo-conflict td { color: var(--muted); }
+
+/* 最少撤回 */
+.withdraw-card h3 { word-break: break-all; }
+.withdraw-conflict summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.withdraw-conflict summary:hover { color: #75491f; }

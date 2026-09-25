@@ -23,6 +23,9 @@
         也可把<strong>基准版与修订版</strong>两版文本分别粘贴做<strong>两版比较</strong>：按事件名对齐，给出新增、删除事件与共同事件的分钟变化及修订行证据。
         还可在区间之外输入<strong>互斥说法候选组</strong>（每行 <code>区间A | 区间B</code>，两条说法只能选一条，最多 6 行）做<strong>先后查询</strong>：
         后端枚举全部组合与共同约束联立、排除冲突组合，合并各可行组合的时间差最紧界后，判断甲是否始终先于/后于乙。
+        当几句叙述实在无法同时成立时，还可使用<strong>最少撤回</strong>（最多 10 条非空约束）：
+        后端按撤回行数递增搜索，给出所有<strong>撤回行数最少</strong>的原始行号组合，
+        每个方案展示剩余约束的<strong>一条可行时间线</strong>；原文已可行时返回零撤回方案，撤回全部行时显示空时间线。
       </p>
     </header>
 
@@ -143,6 +146,23 @@
     </section>
 
     <section id="precedence-result" aria-live="polite"></section>
+
+    <section class="input-area">
+      <label><strong>最少撤回</strong></label>
+      <p class="muted" style="margin-top:0">
+        直接使用上方“事件区间”文本（<strong>最多 10 条非空行</strong>，空行跳过、行号按原始文本计算）。
+        后端复用同一套区间解析与联立求解：当原文互相矛盾时，按<strong>撤回行数从少到多</strong>枚举原始行号组合，
+        返回全部使剩余约束可行的<strong>最少撤回</strong>组合，每个方案展示剩余约束的<strong>一条可行时间线</strong>
+        （以最早事件为第 0 分钟）。<strong>空约束集视为可行</strong>：撤回全部行时显示空时间线；原文已可行时返回零撤回方案。
+        语法错误或超过 10 条非空行会给出明确提示。
+      </p>
+      <div class="button-row" style="margin-top:0">
+        <button id="btn-withdraw" class="primary">最少撤回搜索</button>
+        <button id="btn-withdraw-example">填入撤回示例</button>
+      </div>
+    </section>
+
+    <section id="withdraw-result" aria-live="polite"></section>
 
     <section id="result" aria-live="polite"></section>
   </main>

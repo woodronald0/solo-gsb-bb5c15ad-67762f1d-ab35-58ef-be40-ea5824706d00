@@ -54,6 +54,15 @@ const EXAMPLE_PRECEDENCE_GROUPS = [
 const EXAMPLE_PRECEDENCE_A = "起床";
 const EXAMPLE_PRECEDENCE_B = "开会";
 
+// 最少撤回示例：前 3 行构成闭合负环（同矛盾示例），撤回其中任意 1 行即恢复可行；
+// 第 4 行“睡觉→起床”与冲突无关，会保留在每个方案的剩余约束与可行时间线中。
+const EXAMPLE_WITHDRAWAL = [
+  "早饭,开会,30,60",
+  "开会,晚饭,45,90",
+  "晚饭,早饭,20,50",
+  "睡觉,起床,360,480",
+].join("\n");
+
 const $ = (id) => document.getElementById(id);
 const resultEl = $("result");
 const redundancyEl = $("redundancy-result");
@@ -69,6 +78,7 @@ const precEl = $("precedence-result");
 const precGroupsEl = $("prec-groups");
 const precAEl = $("prec-a");
 const precBEl = $("prec-b");
+const withdrawEl = $("withdraw-result");
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
@@ -639,6 +649,7 @@ $("btn-clear").addEventListener("click", () => {
   repairEl.innerHTML = "";
   anchorEl.innerHTML = "";
   precEl.innerHTML = "";
+  withdrawEl.innerHTML = "";
   refreshLineOptions();
   inputEl.focus();
 });
@@ -649,6 +660,7 @@ inputEl.addEventListener("input", () => {
   repairEl.innerHTML = "";      // 文本已变，旧的修订建议作废
   anchorEl.innerHTML = "";      // 文本已变，旧的锚定结论作废
   precEl.innerHTML = "";        // 共同约束已变，旧的先后查询结论作废
+  withdrawEl.innerHTML = "";    // 文本已变，旧的最少撤回结论作废
 });
 refreshLineOptions();
 
@@ -997,4 +1009,114 @@ $("btn-precedence-clear").addEventListener("click", () => {
 // 候选组或查询事件变化，旧的先后查询结论立即作废
 [precGroupsEl, precAEl, precBEl].forEach((el) => {
   el.addEventListener("input", () => { precEl.innerHTML = ""; });
+});
+
+// ---------- 最少撤回 ----------
+
+// 剩余约束可行时间线：无事件（撤回全部行）时显示空时间线提示
+function timelineTableHtml(timeline) {
+  if (!timeline.length) {
+    return `<p class="muted">空时间线：剩余约束为空（已撤回全部行），空约束集视为可行。</p>`;
+  }
+  const rows = timeline.map((t) =>
+    `<tr><td>${esc(t.event)}</td><td class="num">${t.minute}</td></tr>`).join("");
+  return `
+    <table>
+      <thead><tr><th>事件</th><th class="num">分钟（最早事件 = 0）</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderWithdrawals(data) {
+  const min = data.minimum;
+
+  // 横幅：零撤回（原文可行 / 空约束集）与“最少撤回 k 行”三种语气
+  let banner;
+  if (min === 0 && data.total_lines === 0) {
+    banner = `
+      <div class="banner ok">
+        <h2>✓ 空约束集可行：零撤回</h2>
+        <p>${esc(data.message)}</p>
+      </div>`;
+  } else if (min === 0) {
+    banner = `
+      <div class="banner ok">
+        <h2>✓ 原文无冲突：零撤回方案</h2>
+        <p>${esc(data.message)} 共检查 ${data.checked_combinations} 个撤回组合。</p>
+      </div>`;
+  } else {
+    banner = `
+      <div class="banner conflict">
+        <h2>最少撤回 ${min} 行（共 ${data.plans.length} 个方案）</h2>
+        <p>${esc(data.message)} 共检查 ${data.checked_combinations} 个撤回组合；
+        各方案撤回的原始行号不同，但撤回行数同为最少的 <strong>${min}</strong> 行。</p>
+      </div>`;
+  }
+
+  // 撤回行对照：原始行号 + 上方文本框中的原文内容（空行不会被撤回）
+  const rawLines = inputEl.value.split("\n");
+  const cards = data.plans.map((p) => {
+    const withdrawnRows = p.withdrawn_lines.map((ln) =>
+      `<tr><td class="num">第 ${ln} 行</td><td><code>${esc(rawLines[ln - 1] !== undefined ? rawLines[ln - 1].trim() : "")}</code></td></tr>`
+    ).join("");
+    const withdrawnBlock = p.withdrawn_lines.length
+      ? `<table>
+           <thead><tr><th class="num">撤回的原始行号</th><th>该行原文</th></tr></thead>
+           <tbody>${withdrawnRows}</tbody>
+         </table>`
+      : `<p class="muted">不撤回任何行。</p>`;
+    const heading = p.withdrawn_lines.length
+      ? `方案 ${p.index}：撤回 ${p.withdraw_count} 行（第 ${p.withdrawn_lines.join("、")} 行），保留 ${p.remaining_count} 行`
+      : `方案 ${p.index}：零撤回，保留全部 ${p.remaining_count} 行`;
+    return `
+    <div class="card withdraw-card">
+      <h3>${heading}</h3>
+      ${withdrawnBlock}
+      <h3>剩余约束的一条可行时间线</h3>
+      ${timelineTableHtml(p.timeline)}
+    </div>`;
+  }).join("");
+
+  // 原文矛盾时附原始闭合矛盾链（可展开查看是哪几句话“打了架”）
+  const conflictBlock = (min > 0 && data.conflict)
+    ? `<details class="card withdraw-conflict">
+         <summary>查看原文的闭合矛盾链（撤回前为何不可行）</summary>
+         <div id="withdraw-conflict-body"></div>
+       </details>`
+    : "";
+
+  withdrawEl.innerHTML = banner + cards + conflictBlock;
+  if (min > 0 && data.conflict) {
+    // 复用现有矛盾链渲染（链图 + 涉及原始行明细表）
+    renderConflict({ conflict: data.conflict }, $("withdraw-conflict-body"));
+  }
+}
+
+async function findWithdrawals() {
+  withdrawEl.innerHTML = `<div class="card muted">按撤回行数递增搜索中…</div>`;
+  try {
+    const resp = await fetch("/api/withdrawals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: inputEl.value }),
+    });
+    const data = await resp.json();
+    if (data.status === "ok") {
+      renderWithdrawals(data);
+    } else {
+      renderErrors(data.errors || [{ line: null, message: "未知错误。" }], withdrawEl);
+      withdrawEl.insertAdjacentHTML("afterbegin",
+        `<p class="muted">输入未通过校验，无法进行最少撤回搜索；请修正后重试。</p>`);
+    }
+  } catch (err) {
+    withdrawEl.innerHTML = `
+      <div class="banner err"><h2>请求失败</h2><p>${esc(err.message)}</p></div>`;
+  }
+}
+
+$("btn-withdraw").addEventListener("click", findWithdrawals);
+$("btn-withdraw-example").addEventListener("click", () => {
+  inputEl.value = EXAMPLE_WITHDRAWAL;
+  refreshLineOptions();
+  findWithdrawals();
 });

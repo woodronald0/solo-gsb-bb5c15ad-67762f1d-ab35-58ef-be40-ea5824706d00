@@ -45,6 +45,13 @@ _derive_bound 求 t(乙) − t(甲) 的最紧下界/上界（推不出的端点�
 下界取各组合最小值、上界取各组合最大值，任一组合对应端无界则合并端无界。
 合并下界 ≥ 1 分钟判“甲始终先于乙”，合并上界 ≤ −1 分钟判“甲始终后于乙”，否则判
 “不确定”；无可行组合时不作先后判断。查询的甲、乙必须出现在共同约束中。
+
+最少撤回（find_minimum_withdrawals）：复用 parse_text 与同一套差分约束 Bellman-Ford，
+输入为现有区间格式文本（非空行最多 MAX_WITHDRAWAL_LINES=10 条，超限明确报错）。
+空约束集（空文本）视为可行，直接返回零撤回方案与空时间线；原文已可行时同样返回
+零撤回方案。否则按撤回行数 k=1,2,… 递增枚举 C(n,k) 个原始行号组合，第一个存在可行
+剩余子集的 k 即最少撤回数，返回该层全部可行组合（每个方案附剩余约束的一条规范化
+可行时间线，撤回全部行时时间线为空）；语法错误逐行返回。
 """
 
 from __future__ import annotations
@@ -52,7 +59,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from itertools import product
+from itertools import combinations, product
 
 _INT_RE = re.compile(r"^[+-]?\d+$")
 
@@ -264,8 +271,20 @@ def solve_rows(rows: list[Row]) -> dict:
 
     成功时含 rows/names/index/edges/dist/minutes（minutes 已平移到最早事件为 0）；
     存在负环时直接返回 _conflict_result 的公开矛盾链结构。
+    没有任何行（空约束集）时无任何边，天然可行，返回空图与空时间线。
     """
     names, index, edges = _build_graph(rows)
+    if not names:
+        # 空约束集：无事件无边，任意时间线都可行（最少撤回时撤回全部行会走到这里）
+        return {
+            "status": "ok",
+            "rows": rows,
+            "names": names,
+            "index": index,
+            "edges": edges,
+            "dist": [],
+            "minutes": [],
+        }
     dist, pred, last_relaxed = _relax_all(names, edges)
 
     if last_relaxed is not None:
@@ -1130,3 +1149,125 @@ def solve_precedence(text: str, groups_text: str, qa: str, qb: str) -> dict:
         "event_count": len({r.a for r in rows} | {r.b for r in rows}),
         "line_count": len(rows),
     }
+
+
+# ---------- 最少撤回 ----------
+
+# 撤回搜索允许的最多非空行：枚举 C(n,k) 个子集做 Bellman-Ford，限 10 条保证耗时可控
+MAX_WITHDRAWAL_LINES = 10
+
+
+def find_minimum_withdrawals(text: str) -> dict:
+    """最少撤回：按撤回行数递增搜索使剩余约束可行的最少原始行号组合。
+
+    复用 parse_text 的逐行校验（语法错误逐行返回）与同一套差分约束 Bellman-Ford
+    （solve_rows/_format_ok）。非空行最多 MAX_WITHDRAWAL_LINES 条，超限明确报错
+    （以实际非空行数提示，行号按原始文本计算）。
+
+    空约束集（空文本/只有空行）视为可行，直接返回零撤回方案与空时间线；原文本身
+    可行时也返回零撤回方案。否则按 k=1,2,… 枚举 C(n,k) 个撤回组合，找到第一个存在
+    可行剩余子集的 k 即停止（撤回数最少），返回该层全部可行组合；每个方案附剩余
+    约束的一条规范化可行时间线（最早事件为第 0 分钟），撤回全部行时时间线为空。
+    """
+    # 空文本/只有空行：空约束集视为可行（parse_text 对空文本会报错，这里单独处理）
+    if not text or not text.strip():
+        return {
+            "status": "ok",
+            "minimum": 0,
+            "total_lines": 0,
+            "checked_combinations": 0,
+            "message": "没有任何非空约束：空约束集视为可行，无需撤回任何行（空时间线）。",
+            "original_feasible": True,
+            "plans": [
+                {
+                    "index": 1,
+                    "withdraw_count": 0,
+                    "withdrawn_lines": [],
+                    "remaining_count": 0,
+                    "timeline": [],
+                }
+            ],
+        }
+
+    # 超限检查以非空行为准（与候选组限制同款口径：空行不计入、行号保留）
+    non_empty = sum(1 for raw in text.splitlines() if raw.strip())
+    rows, errors = parse_text(text)
+    if non_empty > MAX_WITHDRAWAL_LINES:
+        errors = errors + [{
+            "line": None,
+            "message": (
+                f"最少撤回最多处理 {MAX_WITHDRAWAL_LINES} 条非空约束，"
+                f"实际得到 {non_empty} 条（搜索按撤回行数枚举全部行号组合，"
+                "组合数随行数快速增长，限 10 条以保证耗时可控）。"
+            ),
+        }]
+    if errors:
+        return {"status": "error", "errors": errors}
+
+    n = len(rows)
+    lines = [r.line for r in rows]
+
+    # k=0：先试原文是否已可行（此时方案为零撤回，时间线即原文规范化可行解）
+    original = solve_rows(rows)
+    checked = 1
+    if original["status"] == "ok":
+        return {
+            "status": "ok",
+            "minimum": 0,
+            "total_lines": n,
+            "checked_combinations": checked,
+            "message": "原文区间无冲突，无需撤回任何行；以下为原文的一条可行时间线。",
+            "original_feasible": True,
+            "plans": [{
+                "index": 1,
+                "withdraw_count": 0,
+                "withdrawn_lines": [],
+                "remaining_count": n,
+                "timeline": _format_ok(original)["timeline"],
+            }],
+        }
+
+    # 原文矛盾：按撤回行数 k 递增枚举 C(n,k) 个原始行号组合，第一个有可行方案的 k 最少
+    original_conflict = original["conflict"]
+    for k in range(1, n + 1):
+        plans: list[dict] = []
+        for combo in combinations(range(n), k):
+            checked += 1
+            withdrawn = {lines[i] for i in combo}
+            remaining = [r for r in rows if r.line not in withdrawn]
+            system = solve_rows(remaining)
+            if system["status"] != "ok":
+                continue  # 剩余约束仍矛盾：该撤回组合不能消除冲突
+            plans.append({
+                "withdrawn_lines": sorted(withdrawn),
+                "remaining_count": len(remaining),
+                "timeline": _format_ok(system)["timeline"],
+            })
+        if plans:
+            # 组合按原始行号升序枚举（combinations 保序），方案直接编号
+            for i, p in enumerate(plans, start=1):
+                p["index"] = i
+                p["withdraw_count"] = k
+            if k == n:
+                message = (
+                    f"原 {n} 条约束互相冲突，最少需要撤回全部 {n} 行；撤回后为空约束集，"
+                    "视为可行（空时间线）。"
+                )
+            else:
+                message = (
+                    f"原 {n} 条约束互相冲突，最少撤回 {k} 行即可使剩余约束可行；"
+                    f"共找到 {len(plans)} 个最少撤回方案，每个方案附剩余约束的一条可行时间线。"
+                )
+            return {
+                "status": "ok",
+                "minimum": k,
+                "total_lines": n,
+                "checked_combinations": checked,
+                "message": message,
+                "original_feasible": False,
+                "conflict": original_conflict,
+                "plans": plans,
+            }
+
+    # 理论上不可达：撤回全部行后空约束集必可行
+    return {"status": "error", "errors": [{"line": None, "message": "搜索失败：未找到任何可行的撤回方案。"}]}

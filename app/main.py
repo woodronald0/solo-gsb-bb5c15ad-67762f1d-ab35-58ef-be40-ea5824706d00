@@ -1,6 +1,6 @@
 """FastAPI 入口：提供静态页面与 /api/solve 联立求解、/api/redundancy 约束冗余核对、
 /api/compare 两版比较、/api/repair 冲突单行修订建议、/api/anchor 绝对时间锚定、
-/api/precedence 互斥说法下的先后查询接口。"""
+/api/precedence 互斥说法下的先后查询、/api/withdrawals 最少撤回接口。"""
 
 from __future__ import annotations
 
@@ -12,13 +12,14 @@ from pydantic import BaseModel
 from .solver import (
     check_redundancy,
     compare_texts,
+    find_minimum_withdrawals,
     solve,
     solve_anchored,
     solve_precedence,
     suggest_repairs,
 )
 
-app = FastAPI(title="口述史事件时间线核对", version="1.5.0")
+app = FastAPI(title="口述史事件时间线核对", version="1.6.0")
 
 
 class SolveRequest(BaseModel):
@@ -86,6 +87,13 @@ def api_precedence(req: PrecedenceRequest) -> dict:
     # 互斥说法下的先后查询：区间文本作共同约束，候选组每行“区间A | 区间B”二选一；
     # 枚举全部组合联立、排除冲突组合，跨组合合并 t(乙)-t(甲) 最紧界后判定先后
     return solve_precedence(req.text or "", req.groups or "", req.a or "", req.b or "")
+
+
+@app.post("/api/withdrawals")
+def api_withdrawals(req: SolveRequest) -> dict:
+    # 最少撤回：复用区间解析与联立求解；对最多 10 条非空有效约束按撤回行数递增搜索，
+    # 返回全部最少撤回原始行号组合及各方案剩余约束的一条可行时间线
+    return find_minimum_withdrawals(req.text or "")
 
 
 @app.get("/")
