@@ -1,6 +1,6 @@
 """FastAPI 入口：提供静态页面与 /api/solve 联立求解、/api/redundancy 约束冗余核对、
 /api/compare 两版比较、/api/repair 冲突单行修订建议、/api/anchor 绝对时间锚定、
-/api/precedence 互斥说法下的先后查询接口。"""
+/api/precedence 互斥说法下的先后查询、/api/withdrawals 最少撤回接口。"""
 
 from __future__ import annotations
 
@@ -12,13 +12,14 @@ from pydantic import BaseModel
 from .solver import (
     check_redundancy,
     compare_texts,
+    minimal_withdrawals,
     solve,
     solve_anchored,
     solve_precedence,
     suggest_repairs,
 )
 
-app = FastAPI(title="口述史事件时间线核对", version="1.5.0")
+app = FastAPI(title="口述史事件时间线核对", version="1.6.0")
 
 
 class SolveRequest(BaseModel):
@@ -88,10 +89,16 @@ def api_precedence(req: PrecedenceRequest) -> dict:
     return solve_precedence(req.text or "", req.groups or "", req.a or "", req.b or "")
 
 
+@app.post("/api/withdrawals")
+def api_withdrawals(req: SolveRequest) -> dict:
+    # 最少撤回：复用现有解析与联立；最多 10 条非空有效约束，按撤回行数递增搜索，
+    # 返回所有使剩余约束可行的最少撤回原始行号组合，每个方案附剩余约束的可行时间线
+    return minimal_withdrawals(req.text or "")
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse("static/index.html")
-
 
 # 静态资源挂载放在最后（Starlette 中 Route 优先于 Mount 匹配，此处仅为可读性）
 app.mount("/static", StaticFiles(directory="static"), name="static")

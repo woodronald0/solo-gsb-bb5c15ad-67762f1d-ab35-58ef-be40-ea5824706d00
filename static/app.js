@@ -69,6 +69,7 @@ const precEl = $("precedence-result");
 const precGroupsEl = $("prec-groups");
 const precAEl = $("prec-a");
 const precBEl = $("prec-b");
+const withdrawalsEl = $("withdrawals-result");
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
@@ -519,6 +520,93 @@ async function fetchRepair() {
 
 $("btn-repair").addEventListener("click", fetchRepair);
 
+// ---------- 最少撤回 ----------
+
+// 可行时间线（最早事件第 0 分钟）：点状轨道图 + 时刻表
+function timelineBlockHtml(timeline) {
+  const points = timeline.map((t) => `
+    <div class="tl-point">
+      <div class="tl-dot"></div>
+      <div class="tl-name">${esc(t.event)}</div>
+      <div class="tl-time">第 ${t.minute} 分钟</div>
+    </div>`).join("");
+  const rows = timeline.map((t) =>
+    `<tr><td>${esc(t.event)}</td><td class="num">${t.minute}</td></tr>`
+  ).join("");
+  return `
+    <div class="timeline-track">
+      <div class="tl-line"></div>
+      <div class="tl-grid">${points}</div>
+    </div>
+    <table>
+      <thead><tr><th>事件</th><th class="num">分钟（最早事件 = 0）</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderWithdrawals(data) {
+  const zero = data.withdrawal_count === 0;
+  const banner = zero
+    ? `<div class="banner ok">
+        <h2>✓ 原文本已可行：零撤回</h2>
+        <p>全部 ${data.line_count} 条约束联立无冲突，无需撤回任何行；以下为完整可行时间线。</p>
+      </div>`
+    : `<div class="banner conflict">
+        <h2>最少撤回 ${data.withdrawal_count} 行：共 ${data.plan_count} 个方案</h2>
+        <p>撤回任一方案所列的原始行后，剩余约束即可联立可行；不存在撤回行数更少的可行方案
+        （空约束集视为可行，故最迟撤回全部 ${data.line_count} 行必有解）。</p>
+      </div>`;
+
+  const cards = data.plans.map((p, i) => {
+    const title = p.withdrawn_lines.length
+      ? `方案 ${i + 1}：撤回第 ${p.withdrawn_lines.join("、")} 行`
+      : `方案 ${i + 1}：零撤回（不撤回任何行）`;
+    const withdrawnTable = p.withdrawn_rows.length ? `
+      <h3>撤回的原始行</h3>
+      <table>
+        <thead><tr><th class="num">行号</th><th>行内容</th></tr></thead>
+        <tbody>${p.withdrawn_rows.map((r) => `<tr>
+          <td class="num">${r.line}</td>
+          <td><code>${esc(`${r.a},${r.b},${r.low},${r.high}`)}</code></td>
+        </tr>`).join("")}</tbody>
+      </table>` : "";
+    const timelineHtml = p.timeline.length
+      ? timelineBlockHtml(p.timeline)
+      : `<p class="muted">撤回全部行后剩余为空约束集：空约束集视为可行，时间线为空。</p>`;
+    return `
+    <div class="card">
+      <h3>${esc(title)}</h3>
+      ${withdrawnTable}
+      <h3>剩余约束的可行时间线（剩余 ${p.remaining_lines.length} 行）</h3>
+      ${timelineHtml}
+    </div>`;
+  }).join("");
+
+  withdrawalsEl.innerHTML = banner + cards;
+}
+
+async function fetchWithdrawals() {
+  withdrawalsEl.innerHTML = `<div class="card muted">按撤回行数递增搜索中…</div>`;
+  try {
+    const resp = await fetch("/api/withdrawals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: inputEl.value }),
+    });
+    const data = await resp.json();
+    if (data.status === "ok") {
+      renderWithdrawals(data);
+    } else {
+      renderErrors(data.errors || [{ line: null, message: "未知错误。" }], withdrawalsEl);
+    }
+  } catch (err) {
+    withdrawalsEl.innerHTML = `
+      <div class="banner err"><h2>请求失败</h2><p>${esc(err.message)}</p></div>`;
+  }
+}
+
+$("btn-withdrawals").addEventListener("click", fetchWithdrawals);
+
 // ---------- 绝对时间锚定 ----------
 
 // 绝对时刻显示：精确点显示单个时刻，范围显示“最早 ~ 最晚”；超出可表示范围时如实标注
@@ -639,6 +727,7 @@ $("btn-clear").addEventListener("click", () => {
   repairEl.innerHTML = "";
   anchorEl.innerHTML = "";
   precEl.innerHTML = "";
+  withdrawalsEl.innerHTML = "";
   refreshLineOptions();
   inputEl.focus();
 });
@@ -649,6 +738,7 @@ inputEl.addEventListener("input", () => {
   repairEl.innerHTML = "";      // 文本已变，旧的修订建议作废
   anchorEl.innerHTML = "";      // 文本已变，旧的锚定结论作废
   precEl.innerHTML = "";        // 共同约束已变，旧的先后查询结论作废
+  withdrawalsEl.innerHTML = ""; // 文本已变，旧的最少撤回方案作废
 });
 refreshLineOptions();
 

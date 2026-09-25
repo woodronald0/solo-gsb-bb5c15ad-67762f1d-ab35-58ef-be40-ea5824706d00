@@ -45,6 +45,13 @@ _derive_bound 求 t(乙) − t(甲) 的最紧下界/上界（推不出的端点�
 下界取各组合最小值、上界取各组合最大值，任一组合对应端无界则合并端无界。
 合并下界 ≥ 1 分钟判“甲始终先于乙”，合并上界 ≤ −1 分钟判“甲始终后于乙”，否则判
 “不确定”；无可行组合时不作先后判断。查询的甲、乙必须出现在共同约束中。
+
+最少撤回（minimal_withdrawals）：对最多 10 条非空有效约束，按撤回行数递增
+（0, 1, 2, …）枚举撤回组合，对每个组合用同一套 solve_rows 联立剩余约束；
+空约束集视为可行（空时间线），故搜索最迟在“撤回全部行”处终止。在首个存在可行
+剩余的撤回行数处收集该规模下的全部组合返回：撤回行数最少且方案齐全；原文本
+已可行时即 k=0 的零撤回方案。每个方案附剩余约束的一条可行时间线（最早事件
+第 0 分钟），撤回全部行时为空时间线；语法错误逐行返回，超限明确提示。
 """
 
 from __future__ import annotations
@@ -52,7 +59,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from itertools import product
+from itertools import combinations, product
 
 _INT_RE = re.compile(r"^[+-]?\d+$")
 
@@ -1129,4 +1136,89 @@ def solve_precedence(text: str, groups_text: str, qa: str, qb: str) -> dict:
         "combinations": combinations,
         "event_count": len({r.a for r in rows} | {r.b for r in rows}),
         "line_count": len(rows),
+    }
+
+
+# ---------- 最少撤回 ----------
+
+# 最少撤回最多支持的非空有效约束行数：按撤回行数递增枚举全部子集（规模为 2^N），
+# 限制行数保证搜索耗时可控
+MAX_WITHDRAWAL_LINES = 10
+
+
+def minimal_withdrawals(text: str) -> dict:
+    """最少撤回：按撤回行数递增搜索，返回所有使剩余约束可行的最少撤回原始行号组合。
+
+    复用 parse_text 逐行校验（语法错误直接返回逐行错误）；非空有效约束超过
+    MAX_WITHDRAWAL_LINES 行时明确提示超限。从撤回 0 行起按撤回行数递增枚举组合，
+    对每个组合用同一套 solve_rows 联立剩余约束：原文本已可行时即返回零撤回方案；
+    空约束集视为可行（空时间线），故搜索最迟在“撤回全部行”处终止。在首个存在
+    可行剩余的撤回行数处收集该规模下的全部组合作为方案返回——撤回行数最少，
+    且该规模下方案齐全。每个方案附剩余约束的一条可行时间线（最早事件第 0 分钟），
+    撤回全部行时为空时间线。
+    """
+    rows, errors = parse_text(text)
+    if errors:
+        return {"status": "error", "errors": errors}
+    if not rows:
+        # parse_text 对空文本已报错，正常不会走到；防御性返回
+        return {
+            "status": "error",
+            "errors": [{"line": None, "message": "没有可联立的有效约束行。"}],
+        }
+    if len(rows) > MAX_WITHDRAWAL_LINES:
+        return {
+            "status": "error",
+            "errors": [{
+                "line": None,
+                "message": f"最少撤回最多支持 {MAX_WITHDRAWAL_LINES} 条非空有效约束，实际得到 {len(rows)} 条"
+                           f"（需按撤回行数枚举全部子集，限制条数以保证搜索耗时可控）。",
+            }],
+        }
+
+    n = len(rows)
+    for k in range(n + 1):
+        plans: list[dict] = []
+        for picked in combinations(range(n), k):
+            chosen = set(picked)
+            withdrawn = [rows[i] for i in range(n) if i in chosen]
+            remaining = [rows[i] for i in range(n) if i not in chosen]
+            if remaining:
+                result = solve_rows(remaining)
+                if result["status"] != "ok":
+                    continue  # 撤回该组合后剩余约束仍矛盾，不是可行方案
+                names = result["names"]
+                minutes = result["minutes"]
+                timeline = [
+                    {"event": names[i], "minute": minutes[i]}
+                    for i in range(len(names))
+                ]
+                timeline.sort(key=lambda x: (x["minute"], x["event"]))
+            else:
+                # 空约束集视为可行：撤回全部行时剩余为空时间线
+                timeline = []
+            plans.append({
+                "withdrawn_lines": [r.line for r in withdrawn],
+                "withdrawn_rows": [
+                    {"line": r.line, "a": r.a, "b": r.b, "low": r.low, "high": r.high}
+                    for r in withdrawn
+                ],
+                "remaining_lines": [r.line for r in remaining],
+                "timeline": timeline,
+            })
+        if plans:
+            # 首个存在可行剩余的撤回行数：即最少撤回行数，返回该规模下全部组合
+            return {
+                "status": "ok",
+                "withdrawal_count": k,
+                "plan_count": len(plans),
+                "plans": plans,
+                "event_count": len({r.a for r in rows} | {r.b for r in rows}),
+                "line_count": n,
+            }
+
+    # 空约束集可行，k == n 时必然返回；此处为防御性返回
+    return {
+        "status": "error",
+        "errors": [{"line": None, "message": "搜索异常：未找到任何可行撤回方案。"}],
     }
